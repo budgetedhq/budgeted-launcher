@@ -9,6 +9,9 @@ const root = new URL("..", import.meta.url).pathname;
 const output = join(root, "dist", "artifacts");
 const version = JSON.parse(await readFile(join(root, "package.json"), "utf8")).version;
 const publicKey = process.env.LAUNCHER_MANIFEST_PUBLIC_KEY ?? "UNPUBLISHED";
+if (process.env.REQUIRE_PUBLISHABLE_ARTIFACTS === "true" && (!publicKey || publicKey === "UNPUBLISHED")) {
+  throw new Error("LAUNCHER_MANIFEST_PUBLIC_KEY is required for publishable artifacts.");
+}
 await rm(output, { recursive: true, force: true });
 await mkdir(join(output, "lambda"), { recursive: true });
 await mkdir(join(output, "codebuild"), { recursive: true });

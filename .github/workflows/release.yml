@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
 
+concurrency:
+  group: budgeted-launcher-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -12,11 +16,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require the tag to match package.json
+        run: node scripts/validate-release-tag.mjs
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 11.25.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.16.0
           cache: pnpm
@@ -28,75 +36,159 @@ jobs:
       - run: cfn-lint infra/launcher.yaml infra/publisher.yaml
       - run: pnpm build
         env:
-          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ secrets.LAUNCHER_MANIFEST_PUBLIC_KEY }}
-      - uses: actions/upload-artifact@v4
+          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ vars.LAUNCHER_MANIFEST_PUBLIC_KEY }}
+          REQUIRE_PUBLISHABLE_ARTIFACTS: "true"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: launcher-artifacts
           path: dist/artifacts
+          if-no-files-found: error
+          retention-days: 1
 
   stage:
     needs: build
     runs-on: ubuntu-latest
+    environment: publisher-staging
     strategy:
       fail-fast: true
       matrix:
         region: [us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2, ap-northeast-1]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: launcher-artifacts
           path: dist/artifacts
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPublisher-${{ matrix.region }}
+          role-to-assume: arn:aws:iam::${{ vars.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherStager-${{ matrix.region }}
           aws-region: ${{ matrix.region }}
       - run: node scripts/create-release-manifest.mjs
         env:
           AWS_REGION: ${{ matrix.region }}
           LAUNCHER_MANIFEST_PRIVATE_KEY: ${{ secrets.LAUNCHER_MANIFEST_PRIVATE_KEY }}
-          LAUNCHER_RELEASE_NOTES: ${{ github.event.head_commit.message }}
+          LAUNCHER_RELEASE_NOTES: Budgeted Launcher ${{ github.ref_name }}
           SUPPORTED_BUDGETED_RANGE: ">=0.1.0 <1.0.0"
       - run: node scripts/verify-release-manifest.mjs
         env:
-          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ secrets.LAUNCHER_MANIFEST_PUBLIC_KEY }}
+          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ vars.LAUNCHER_MANIFEST_PUBLIC_KEY }}
       - run: aws cloudformation validate-template --template-body file://dist/artifacts/template.yaml
-      - name: Publish immutable release then advance stable pointers
+      - name: Publish immutable release
         env:
           AWS_REGION: ${{ matrix.region }}
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./dist/artifacts/checksums.json').version")
-          BUCKET="s3://budgetedhq-budgeted-launcher-${AWS_REGION}"
-          if aws s3api head-object --bucket "budgetedhq-budgeted-launcher-${AWS_REGION}" --key "releases/${VERSION}/template.yaml" >/dev/null 2>&1; then
-            echo "Release ${VERSION} already exists in ${AWS_REGION}; immutable paths cannot be overwritten."
+          BUCKET_NAME="budgetedhq-budgeted-launcher-${AWS_REGION}"
+          BUCKET="s3://${BUCKET_NAME}"
+          EXISTING_OBJECTS=$(aws s3api list-objects-v2 --bucket "${BUCKET_NAME}" --prefix "releases/${VERSION}/" --max-keys 1 --query KeyCount --output text)
+          if [[ "${EXISTING_OBJECTS}" != "0" ]]; then
+            echo "Release ${VERSION} already exists or was partially staged in ${AWS_REGION}; immutable paths cannot be overwritten."
             exit 1
           fi
-          aws s3 cp dist/artifacts/renderer "${BUCKET}/releases/${VERSION}/renderer" --recursive --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp dist/artifacts/lambda "${BUCKET}/releases/${VERSION}/lambda" --recursive
-          aws s3 cp dist/artifacts/codebuild "${BUCKET}/releases/${VERSION}/codebuild" --recursive
-          aws s3 cp dist/artifacts/template.yaml "${BUCKET}/releases/${VERSION}/template.yaml"
-          aws s3 cp dist/artifacts/checksums.json "${BUCKET}/releases/${VERSION}/checksums.json"
-          aws s3 cp dist/artifacts/renderer.zip "${BUCKET}/releases/${VERSION}/renderer.zip"
-          aws s3 cp dist/artifacts/manifest.json "${BUCKET}/releases/${VERSION}/manifest.json"
+          aws s3 cp dist/artifacts/renderer "${BUCKET}/releases/${VERSION}/renderer" --recursive --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/lambda "${BUCKET}/releases/${VERSION}/lambda" --recursive --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/codebuild "${BUCKET}/releases/${VERSION}/codebuild" --recursive --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/template.yaml "${BUCKET}/releases/${VERSION}/template.yaml" --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/checksums.json "${BUCKET}/releases/${VERSION}/checksums.json" --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/renderer.zip "${BUCKET}/releases/${VERSION}/renderer.zip" --cache-control "public,max-age=31536000,immutable" --only-show-errors
+          aws s3 cp dist/artifacts/manifest.json "${BUCKET}/releases/${VERSION}/manifest.json" --cache-control "public,max-age=31536000,immutable" --only-show-errors
 
   promote:
     needs: stage
     runs-on: ubuntu-latest
+    environment: production
     strategy:
       fail-fast: true
+      max-parallel: 1
       matrix:
         region: [us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2, ap-northeast-1]
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require IAM validation for this launcher version
+        env:
+          IAM_VALIDATED_LAUNCHER_VERSION: ${{ vars.IAM_VALIDATED_LAUNCHER_VERSION }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          if [[ "${IAM_VALIDATED_LAUNCHER_VERSION}" != "${VERSION}" ]]; then
+            echo "Set IAM_VALIDATED_LAUNCHER_VERSION to ${VERSION} only after the disposable-account permission matrix passes."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPublisher-${{ matrix.region }}
+          role-to-assume: arn:aws:iam::${{ vars.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPromoter-${{ matrix.region }}
           aws-region: ${{ matrix.region }}
-      - name: Advance stable pointers after every region is staged
+      - name: Back up and advance stable pointers
         env:
           AWS_REGION: ${{ matrix.region }}
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
-          BUCKET="s3://budgetedhq-budgeted-launcher-${AWS_REGION}"
-          aws s3 cp "${BUCKET}/releases/${VERSION}/template.yaml" "${BUCKET}/stable/template.yaml" --cache-control no-store
-          aws s3 cp "${BUCKET}/releases/${VERSION}/manifest.json" "${BUCKET}/stable/manifest.json" --cache-control no-store
+          BUCKET_NAME="budgetedhq-budgeted-launcher-${AWS_REGION}"
+          BUCKET="s3://${BUCKET_NAME}"
+          BACKUP_PREFIX="promotion-backups/${GITHUB_RUN_ID}"
+
+          aws s3api head-object --bucket "${BUCKET_NAME}" --key "releases/${VERSION}/template.yaml" >/dev/null
+          aws s3api head-object --bucket "${BUCKET_NAME}" --key "releases/${VERSION}/manifest.json" >/dev/null
+
+          TEMPLATE_EXISTS=0
+          MANIFEST_EXISTS=0
+          if aws s3api head-object --bucket "${BUCKET_NAME}" --key stable/template.yaml >/dev/null 2>&1; then TEMPLATE_EXISTS=1; fi
+          if aws s3api head-object --bucket "${BUCKET_NAME}" --key stable/manifest.json >/dev/null 2>&1; then MANIFEST_EXISTS=1; fi
+          if [[ "${TEMPLATE_EXISTS}" != "${MANIFEST_EXISTS}" ]]; then
+            echo "The existing stable pointers are inconsistent in ${AWS_REGION}; refusing promotion."
+            exit 1
+          fi
+
+          if [[ "${TEMPLATE_EXISTS}" == "1" ]]; then
+            aws s3 cp "${BUCKET}/stable/template.yaml" "${BUCKET}/${BACKUP_PREFIX}/template.yaml" --only-show-errors
+            aws s3 cp "${BUCKET}/stable/manifest.json" "${BUCKET}/${BACKUP_PREFIX}/manifest.json" --only-show-errors
+            aws s3api put-object --bucket "${BUCKET_NAME}" --key "${BACKUP_PREFIX}/previous" >/dev/null
+          else
+            aws s3api put-object --bucket "${BUCKET_NAME}" --key "${BACKUP_PREFIX}/empty" >/dev/null
+          fi
+
+          aws s3 cp "${BUCKET}/releases/${VERSION}/template.yaml" "${BUCKET}/stable/template.yaml" --cache-control no-store --only-show-errors
+          aws s3 cp "${BUCKET}/releases/${VERSION}/manifest.json" "${BUCKET}/stable/manifest.json" --cache-control no-store --only-show-errors
+
+          RELEASE_TEMPLATE_SHA=$(aws s3 cp "${BUCKET}/releases/${VERSION}/template.yaml" - --only-show-errors | sha256sum | cut -d ' ' -f 1)
+          STABLE_TEMPLATE_SHA=$(aws s3 cp "${BUCKET}/stable/template.yaml" - --only-show-errors | sha256sum | cut -d ' ' -f 1)
+          RELEASE_MANIFEST_SHA=$(aws s3 cp "${BUCKET}/releases/${VERSION}/manifest.json" - --only-show-errors | sha256sum | cut -d ' ' -f 1)
+          STABLE_MANIFEST_SHA=$(aws s3 cp "${BUCKET}/stable/manifest.json" - --only-show-errors | sha256sum | cut -d ' ' -f 1)
+          if [[ "${RELEASE_TEMPLATE_SHA}" != "${STABLE_TEMPLATE_SHA}" || "${RELEASE_MANIFEST_SHA}" != "${STABLE_MANIFEST_SHA}" ]]; then
+            echo "Stable pointer verification failed in ${AWS_REGION}."
+            exit 1
+          fi
+
+  rollback-promotion:
+    needs: promote
+    if: ${{ always() && needs.promote.result == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2, ap-northeast-1]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPromoter-${{ matrix.region }}
+          aws-region: ${{ matrix.region }}
+      - name: Restore the previous stable pointers
+        env:
+          AWS_REGION: ${{ matrix.region }}
+        run: |
+          set -euo pipefail
+          BUCKET_NAME="budgetedhq-budgeted-launcher-${AWS_REGION}"
+          BUCKET="s3://${BUCKET_NAME}"
+          BACKUP_PREFIX="promotion-backups/${GITHUB_RUN_ID}"
+          if aws s3api head-object --bucket "${BUCKET_NAME}" --key "${BACKUP_PREFIX}/previous" >/dev/null 2>&1; then
+            aws s3 cp "${BUCKET}/${BACKUP_PREFIX}/template.yaml" "${BUCKET}/stable/template.yaml" --cache-control no-store --only-show-errors
+            aws s3 cp "${BUCKET}/${BACKUP_PREFIX}/manifest.json" "${BUCKET}/stable/manifest.json" --cache-control no-store --only-show-errors
+          elif aws s3api head-object --bucket "${BUCKET_NAME}" --key "${BACKUP_PREFIX}/empty" >/dev/null 2>&1; then
+            aws s3 rm "${BUCKET}/stable/template.yaml" --only-show-errors
+            aws s3 rm "${BUCKET}/stable/manifest.json" --only-show-errors
+          else
+            echo "No promotion was started in ${AWS_REGION}; nothing to restore."
+          fi

@@ -62,10 +62,17 @@ pnpm build
 
 `pnpm build` emits versioned Lambda, CodeBuild-runner, renderer, template, and checksum artifacts under `dist/artifacts/`. A release tag runs the GitHub Actions OIDC workflow, builds once, validates, signs a regional manifest, publishes immutable artifacts in all ten regions, and advances `stable` only after the immutable upload succeeds.
 
-The maintainer deploys [`infra/publisher.yaml`](infra/publisher.yaml) once in each supported region, supplying the existing GitHub OIDC provider ARN. Release publishing requires these repository secrets:
+The maintainer deploys [`infra/publisher.yaml`](infra/publisher.yaml) once in each supported region, supplying the existing GitHub OIDC provider ARN. Configure two GitHub environments and restrict both to protected `v*` tags:
+
+- `publisher-staging` holds the `LAUNCHER_MANIFEST_PRIVATE_KEY` environment secret. It can write only immutable release prefixes.
+- `production` requires owner approval. It can advance `stable`, records short-lived regional backups, and restores every region if promotion fails.
+
+Configure these repository variables:
 
 - `PUBLISHER_AWS_ACCOUNT_ID`
 - `LAUNCHER_MANIFEST_PUBLIC_KEY` — base64-encoded DER SPKI public key embedded in the customer template
-- `LAUNCHER_MANIFEST_PRIVATE_KEY` — base64-encoded PEM private key used only by the release workflow
+- `IAM_VALIDATED_LAUNCHER_VERSION` — set to the exact package version only after its disposable-account permission matrix passes
+
+The release workflow is serialized, requires the tag to exactly equal `v` plus the stable `package.json` version, and pins every imported action to an immutable commit. Test the staged template at `releases/<version>/template.yaml`, record the IAM validation evidence, set `IAM_VALIDATED_LAUNCHER_VERSION`, and only then approve the `production` environment.
 
 The scoped deployment policy in [`infra/launcher.yaml`](infra/launcher.yaml) is a committed baseline. Before publishing support for a new Budgeted feature or service, record `sst diff`, deploy, seed, and remove calls in a disposable account, update the policy and signed `supportedBudgetedRange`, run IAM Access Analyzer, and complete regional create/update/delete canaries. A Budgeted release requiring new permissions must wait for that Launcher release.

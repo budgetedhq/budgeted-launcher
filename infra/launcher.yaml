@@ -296,7 +296,7 @@ Resources:
                 Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
                 Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*"
               - Effect: Allow
-                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchGetItem", "dynamodb:TransactWriteItems"]
+                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchGetItem", "dynamodb:ConditionCheckItem"]
                 Resource: !GetAtt StateTable.Arn
               - Effect: Allow
                 Action: ["codebuild:StartBuild", "codebuild:StopBuild", "codebuild:BatchGetBuilds"]

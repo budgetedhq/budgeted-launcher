@@ -8,6 +8,14 @@ Parameters:
   GitHubOidcProviderArn:
     Type: String
     Description: ARN of the account's existing token.actions.githubusercontent.com OIDC provider.
+  GitHubStagingEnvironment:
+    Type: String
+    Default: publisher-staging
+    AllowedPattern: "^[A-Za-z0-9._-]+$"
+  GitHubProductionEnvironment:
+    Type: String
+    Default: production
+    AllowedPattern: "^[A-Za-z0-9._-]+$"
 
 Resources:
   PublisherBucket:
@@ -18,6 +26,14 @@ Resources:
       BucketName: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
       VersioningConfiguration:
         Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpirePromotionBackups
+            Status: Enabled
+            Prefix: promotion-backups/
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -42,14 +58,6 @@ Resources:
             Resource:
               - !Sub "${PublisherBucket.Arn}/stable/*"
               - !Sub "${PublisherBucket.Arn}/releases/*"
-          - Sid: PublicReleaseList
-            Effect: Allow
-            Principal: "*"
-            Action: s3:ListBucket
-            Resource: !GetAtt PublisherBucket.Arn
-            Condition:
-              StringLike:
-                s3:prefix: ["releases/*"]
           - Sid: DenyInsecureTransport
             Effect: Deny
             Principal: "*"
@@ -61,10 +69,10 @@ Resources:
               Bool:
                 aws:SecureTransport: false
 
-  GitHubPublisherRole:
+  GitHubStagingRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "BudgetedLauncherPublisher-${AWS::Region}"
+      RoleName: !Sub "BudgetedLauncherStager-${AWS::Region}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -75,10 +83,9 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:ref:refs/tags/v*"
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:environment:${GitHubStagingEnvironment}"
       Policies:
-        - PolicyName: PublishImmutableLauncherArtifacts
+        - PolicyName: StageImmutableLauncherArtifacts
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
@@ -86,16 +93,55 @@ Resources:
                 Action: ["s3:GetObject", "s3:PutObject"]
                 Resource:
                   - !Sub "${PublisherBucket.Arn}/releases/*"
-                  - !Sub "${PublisherBucket.Arn}/stable/*"
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt PublisherBucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: ["releases/*"]
               - Effect: Allow
                 Action: cloudformation:ValidateTemplate
                 Resource: "*"
 
+  GitHubPromotionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "BudgetedLauncherPromoter-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:environment:${GitHubProductionEnvironment}"
+      Policies:
+        - PolicyName: PromoteAndRestoreLauncherRelease
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "${PublisherBucket.Arn}/releases/*"
+                  - !Sub "${PublisherBucket.Arn}/stable/*"
+                  - !Sub "${PublisherBucket.Arn}/promotion-backups/*"
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub "${PublisherBucket.Arn}/stable/*"
+                  - !Sub "${PublisherBucket.Arn}/promotion-backups/*"
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub "${PublisherBucket.Arn}/stable/*"
+
 Outputs:
   BucketName:
     Value: !Ref PublisherBucket
-  GitHubPublisherRoleArn:
-    Value: !GetAtt GitHubPublisherRole.Arn
+  GitHubStagingRoleArn:
+    Value: !GetAtt GitHubStagingRole.Arn
+  GitHubPromotionRoleArn:
+    Value: !GetAtt GitHubPromotionRole.Arn

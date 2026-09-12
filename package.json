@@ -16,6 +16,7 @@
     "dev": "vite",
     "lint": "eslint .",
     "package:cloud": "node ./scripts/package-cloud.mjs",
+    "release:validate-tag": "node ./scripts/validate-release-tag.mjs",
     "template:validate": "node ./scripts/validate-template.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
