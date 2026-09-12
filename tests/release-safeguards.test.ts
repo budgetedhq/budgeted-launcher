@@ -32,9 +32,16 @@ describe("release safeguards", () => {
 
   it("does not expose bucket listing and separates staging from promotion", async () => {
     const template = await readFile(resolve(process.cwd(), "infra/publisher.yaml"), "utf8");
+    const deploymentScript = await readFile(resolve(process.cwd(), "deploy/deploy-stacks.sh"), "utf8");
     expect(template).not.toContain("PublicReleaseList");
     expect(template).toContain("BudgetedLauncherStager-${AWS::Region}");
     expect(template).toContain("BudgetedLauncherPromoter-${AWS::Region}");
     expect(template).toContain("promotion-backups/");
+    expect(template).toContain("GitHubOidcSubjectPrefix:");
+    expect(template).toContain("repo:budgetedhq@327071714/budgeted-launcher@1367179722");
+    expect(template).toContain("${GitHubOidcSubjectPrefix}:environment:${GitHubStagingEnvironment}");
+    expect(template).toContain("${GitHubOidcSubjectPrefix}:environment:${GitHubProductionEnvironment}");
+    expect(template).not.toContain("repo:${GitHubRepository}:environment:");
+    expect(deploymentScript).toContain("GitHubOidcSubjectPrefix=\"${github_oidc_subject_prefix}\"");
   });
 });

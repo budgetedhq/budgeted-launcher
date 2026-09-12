@@ -5,6 +5,7 @@
 
 publisher_account_id="$(aws sts get-caller-identity --query Account --output text)"
 github_oidc_provider_arn="arn:aws:iam::${publisher_account_id}:oidc-provider/token.actions.githubusercontent.com"
+github_oidc_subject_prefix="repo:budgetedhq@327071714/budgeted-launcher@1367179722"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 publisher_template_file="${script_dir}/../infra/publisher.yaml"
@@ -18,6 +19,7 @@ fi
 # confirm identity to continue
 printf 'AWS profile: %s\n' "${AWS_PROFILE:-<not set>}"
 printf 'AWS account ID: %s\n' "${publisher_account_id}"
+printf 'GitHub OIDC subject prefix: %s\n' "${github_oidc_subject_prefix}"
 read -r -p 'Continue deploying publisher stacks? [y/N] ' confirmation
 if [[ ! "${confirmation}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
   echo 'Deployment cancelled.'
@@ -52,7 +54,7 @@ for publisher_region in "${publisher_regions[@]}"; do
     --template-file "${publisher_template_file}" \
     --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides \
-      GitHubRepository=budgetedhq/budgeted-launcher \
+      GitHubOidcSubjectPrefix="${github_oidc_subject_prefix}" \
       GitHubOidcProviderArn="${github_oidc_provider_arn}" \
       GitHubStagingEnvironment=publisher-staging \
       GitHubProductionEnvironment=production \

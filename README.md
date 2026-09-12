@@ -62,7 +62,7 @@ pnpm build
 
 `pnpm build` emits versioned Lambda, CodeBuild-runner, renderer, template, and checksum artifacts under `dist/artifacts/`. A release tag runs the GitHub Actions OIDC workflow, builds once, validates, signs a regional manifest, publishes immutable artifacts in all ten regions, and advances `stable` only after the immutable upload succeeds.
 
-The maintainer deploys [`infra/publisher.yaml`](infra/publisher.yaml) once in each supported region, supplying the existing GitHub OIDC provider ARN. Configure two GitHub environments and restrict both to protected `v*` tags:
+The maintainer deploys [`infra/publisher.yaml`](infra/publisher.yaml) once in each supported region, supplying the existing GitHub OIDC provider ARN. The template defaults to GitHub's immutable OIDC subject prefix for this repository, `repo:budgetedhq@327071714/budgeted-launcher@1367179722`; verify that value against the repository OIDC settings before deployment. Configure two GitHub environments and restrict both to protected `v*` tags:
 
 - `publisher-staging` holds the `LAUNCHER_MANIFEST_PRIVATE_KEY` environment secret. It can write only immutable release prefixes.
 - `production` requires owner approval. It can advance `stable`, records short-lived regional backups, and restores every region if promotion fails.
