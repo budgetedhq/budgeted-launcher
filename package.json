@@ -1,0 +1,61 @@
+{
+  "name": "budgeted-launcher",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Deploy and maintain Budgeted from a private serverless launcher in your AWS account.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/budgetedhq/budgeted-launcher.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": { "node": "^24.16.0" },
+  "scripts": {
+    "build": "pnpm run clean && vite build && tsup && node ./scripts/package-cloud.mjs",
+    "clean": "node ./scripts/clean.mjs",
+    "dev": "vite",
+    "lint": "eslint .",
+    "package:cloud": "node ./scripts/package-cloud.mjs",
+    "template:validate": "node ./scripts/validate-template.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.883.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.883.0",
+    "@aws-sdk/client-codebuild": "^3.883.0",
+    "@aws-sdk/client-dynamodb": "^3.883.0",
+    "@aws-sdk/client-s3": "^3.883.0",
+    "@aws-sdk/client-ssm": "^3.883.0",
+    "@aws-sdk/lib-dynamodb": "^3.883.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "smol-toml": "^1.7.0",
+    "tar": "^7.4.3",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/aws-lambda": "^8.10.152",
+    "@types/node": "24.3.1",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "eslint": "^9.35.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "jsdom": "^26.1.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.42.0",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,102 @@
+name: Publish launcher
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pipx install cfn-lint
+      - run: cfn-lint infra/launcher.yaml infra/publisher.yaml
+      - run: pnpm build
+        env:
+          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ secrets.LAUNCHER_MANIFEST_PUBLIC_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-artifacts
+          path: dist/artifacts
+
+  stage:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        region: [us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2, ap-northeast-1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: launcher-artifacts
+          path: dist/artifacts
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPublisher-${{ matrix.region }}
+          aws-region: ${{ matrix.region }}
+      - run: node scripts/create-release-manifest.mjs
+        env:
+          AWS_REGION: ${{ matrix.region }}
+          LAUNCHER_MANIFEST_PRIVATE_KEY: ${{ secrets.LAUNCHER_MANIFEST_PRIVATE_KEY }}
+          LAUNCHER_RELEASE_NOTES: ${{ github.event.head_commit.message }}
+          SUPPORTED_BUDGETED_RANGE: ">=0.1.0 <1.0.0"
+      - run: node scripts/verify-release-manifest.mjs
+        env:
+          LAUNCHER_MANIFEST_PUBLIC_KEY: ${{ secrets.LAUNCHER_MANIFEST_PUBLIC_KEY }}
+      - run: aws cloudformation validate-template --template-body file://dist/artifacts/template.yaml
+      - name: Publish immutable release then advance stable pointers
+        env:
+          AWS_REGION: ${{ matrix.region }}
+        run: |
+          VERSION=$(node -p "require('./dist/artifacts/checksums.json').version")
+          BUCKET="s3://budgetedhq-budgeted-launcher-${AWS_REGION}"
+          if aws s3api head-object --bucket "budgetedhq-budgeted-launcher-${AWS_REGION}" --key "releases/${VERSION}/template.yaml" >/dev/null 2>&1; then
+            echo "Release ${VERSION} already exists in ${AWS_REGION}; immutable paths cannot be overwritten."
+            exit 1
+          fi
+          aws s3 cp dist/artifacts/renderer "${BUCKET}/releases/${VERSION}/renderer" --recursive --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/artifacts/lambda "${BUCKET}/releases/${VERSION}/lambda" --recursive
+          aws s3 cp dist/artifacts/codebuild "${BUCKET}/releases/${VERSION}/codebuild" --recursive
+          aws s3 cp dist/artifacts/template.yaml "${BUCKET}/releases/${VERSION}/template.yaml"
+          aws s3 cp dist/artifacts/checksums.json "${BUCKET}/releases/${VERSION}/checksums.json"
+          aws s3 cp dist/artifacts/renderer.zip "${BUCKET}/releases/${VERSION}/renderer.zip"
+          aws s3 cp dist/artifacts/manifest.json "${BUCKET}/releases/${VERSION}/manifest.json"
+
+  promote:
+    needs: stage
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        region: [us-east-1, us-east-2, us-west-2, ca-central-1, eu-west-1, eu-west-2, eu-central-1, ap-southeast-1, ap-southeast-2, ap-northeast-1]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.PUBLISHER_AWS_ACCOUNT_ID }}:role/BudgetedLauncherPublisher-${{ matrix.region }}
+          aws-region: ${{ matrix.region }}
+      - name: Advance stable pointers after every region is staged
+        env:
+          AWS_REGION: ${{ matrix.region }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          BUCKET="s3://budgetedhq-budgeted-launcher-${AWS_REGION}"
+          aws s3 cp "${BUCKET}/releases/${VERSION}/template.yaml" "${BUCKET}/stable/template.yaml" --cache-control no-store
+          aws s3 cp "${BUCKET}/releases/${VERSION}/manifest.json" "${BUCKET}/stable/manifest.json" --cache-control no-store

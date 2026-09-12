@@ -1,0 +1,836 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Private serverless Budgeted Launcher appliance. Removing this stack does not remove Budgeted.
+
+Parameters:
+  OwnerEmail:
+    Type: String
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: Enter the email address that will own this launcher.
+
+Mappings:
+  Release:
+    Current:
+      Version: "__LAUNCHER_VERSION__"
+      ManifestPublicKey: "__MANIFEST_PUBLIC_KEY__"
+
+Resources:
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      Tags:
+        - Key: budgeted:component
+          Value: launcher
+
+  AssetBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: ExpireBuildCache
+            Status: Enabled
+            Prefix: codebuild-cache/
+            ExpirationInDays: 30
+
+  OperationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  CloudFrontOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-assets"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-${AWS::Region}-security"
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.amazoncognito.com; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://*.amazoncognito.com"
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: no-referrer
+            Override: true
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 63072000
+            IncludeSubdomains: true
+            Preload: true
+            Override: true
+          XSSProtection:
+            Protection: true
+            ModeBlock: true
+            Override: true
+
+  SpaRewrite:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-${AWS::Region}-spa"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Keep browser routes on the launcher SPA.
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (request.uri.indexOf(".") === -1) request.uri = "/index.html";
+          return request;
+        }
+
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-api"
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: false
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: "$default"
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: assets
+            DomainName: !GetAtt AssetBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOac.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: api
+            DomainName: !Sub "${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: assets
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt SpaRewrite.FunctionARN
+        CacheBehaviors:
+          - PathPattern: "/api/*"
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            Compress: true
+            CachePolicyId: 413f0e8e-5d8a-4d79-b93a-4ab0e6d1e4f8
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: !Ref SecurityHeaders
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: TLSv1.2_2021
+
+  AssetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${AssetBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt AssetBucket.Arn
+              - !Sub "${AssetBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "${AWS::StackName}-owner"
+      UserPoolTier: ESSENTIALS
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        SignInPolicy:
+          AllowedFirstAuthFactors: [EMAIL_OTP]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      DeletionProtection: INACTIVE
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+
+  OwnerUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref UserPool
+      Username: !Ref OwnerEmail
+      MessageAction: SUPPRESS
+      UserAttributes:
+        - Name: email
+          Value: !Ref OwnerEmail
+        - Name: email_verified
+          Value: "true"
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "budgeted-${AWS::AccountId}-${AWS::Region}"
+      UserPoolId: !Ref UserPool
+      ManagedLoginVersion: 2
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: browser-pkce
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      ExplicitAuthFlows: [ALLOW_USER_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs:
+        - !Sub "https://${Distribution.DomainName}/"
+      LogoutURLs:
+        - !Sub "https://${Distribution.DomainName}/"
+
+  ApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref Api
+      Name: owner-jwt
+      AuthorizerType: JWT
+      IdentitySource: ["$request.header.Authorization"]
+      JwtConfiguration:
+        Audience: [!Ref UserPoolClient]
+        Issuer: !Sub "https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPool}"
+
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-api"
+      Path: /budgeted-launcher/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApiAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*"
+              - Effect: Allow
+                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:BatchGetItem", "dynamodb:TransactWriteItems"]
+                Resource: !GetAtt StateTable.Arn
+              - Effect: Allow
+                Action: ["codebuild:StartBuild", "codebuild:StopBuild", "codebuild:BatchGetBuilds"]
+                Resource:
+                  - !GetAtt BuildProject.Arn
+                  - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:build/${BuildProject}:*"
+              - Effect: Allow
+                Action: ["ssm:PutParameter", "ssm:DeleteParameter", "ssm:DeleteParameters"]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/budgeted-launcher/${AWS::StackName}/operations/*"
+              - Effect: Allow
+                Action: logs:GetLogEvents
+                Resource: !Sub "${OperationLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::budgetedhq-budgeted-launcher-${AWS::Region}/stable/manifest.json"
+                  - !Sub "arn:${AWS::Partition}:s3:::budgetedhq-budgeted-launcher-${AWS::Region}/releases/*"
+              - Effect: Allow
+                Action: cloudformation:UpdateStack
+                Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt SelfUpdateRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-api"
+      Runtime: nodejs24.x
+      Handler: api.handler
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 30
+      Role: !GetAtt ApiRole.Arn
+      Code:
+        S3Bucket: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+        S3Key: !Sub
+          - "releases/${Version}/lambda/api.zip"
+          - Version: !FindInMap [Release, Current, Version]
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref StateTable
+          OWNER_EMAIL: !Ref OwnerEmail
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          LAUNCHER_VERSION: !FindInMap [Release, Current, Version]
+          BUILD_PROJECT_NAME: !Ref BuildProject
+          OPERATION_PARAMETER_PREFIX: !Sub "/budgeted-launcher/${AWS::StackName}/operations"
+          OPERATION_LOG_GROUP: !Ref OperationLogGroup
+          STACK_NAME: !Ref AWS::StackName
+          SELF_UPDATE_ROLE_ARN: !GetAtt SelfUpdateRole.Arn
+          PUBLISHER_BUCKET: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+          MANIFEST_KEY: stable/manifest.json
+          MANIFEST_PUBLIC_KEY: !FindInMap [Release, Current, ManifestPublicKey]
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: "ANY /api/v1/{proxy+}"
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ApiAuthorizer
+      Target: !Sub "integrations/${ApiIntegration}"
+
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*/api/v1/*"
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-build"
+      Path: /budgeted-launcher/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunnerControlPlane
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: !Sub "${OperationLogGroup.Arn}:*"
+              - Effect: Allow
+                Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+                Resource: !GetAtt StateTable.Arn
+              - Effect: Allow
+                Action: ["ssm:GetParameter", "ssm:DeleteParameter", "ssm:DeleteParameters"]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/budgeted-launcher/${AWS::StackName}/operations/*"
+              - Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject"]
+                Resource: !Sub "${AssetBucket.Arn}/codebuild-cache/*"
+              - Effect: Allow
+                Action: "s3:GetObject"
+                Resource: !Sub
+                  - "${AssetBucket.Arn}/runner/${Version}/runner.zip"
+                  - Version: !FindInMap [Release, Current, Version]
+        - PolicyName: BudgetedDeployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SstAndBudgetedReadWrite
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                  - cloudformation:ListStacks
+                  - cloudformation:UpdateStack
+                  - cloudformation:ValidateTemplate
+                  - apigateway:DELETE
+                  - apigateway:GET
+                  - apigateway:PATCH
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - cloudfront:CreateDistribution
+                  - cloudfront:CreateFunction
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:DeleteFunction
+                  - cloudfront:DescribeFunction
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:GetFunction
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:PublishFunction
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:UpdateFunction
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:UpdateContinuousBackups
+                  - dynamodb:UpdateTable
+                  - ecr:CreateRepository
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:GetAuthorizationToken
+                  - ecr:GetLifecyclePolicy
+                  - ecr:PutLifecyclePolicy
+                  - ecr:TagResource
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:ListTargetsByRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - lambda:AddPermission
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionUrlConfig
+                  - lambda:GetPolicy
+                  - lambda:ListTags
+                  - lambda:ListVersionsByFunction
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:PutFunctionEventInvokeConfig
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:UpdateFunctionEventInvokeConfig
+                  - lambda:UpdateFunctionUrlConfig
+                  - lambda:CreateFunctionUrlConfig
+                  - lambda:DeleteFunctionUrlConfig
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:DeleteObject
+                  - s3:GetBucketLocation
+                  - s3:GetBucketPolicy
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListAllMyBuckets
+                  - s3:PutBucketCors
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutBucketTagging
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:PutObject
+                  - ses:CreateReceiptRule
+                  - ses:CreateReceiptRuleSet
+                  - ses:DeleteReceiptRule
+                  - ses:DeleteReceiptRuleSet
+                  - ses:DescribeReceiptRuleSet
+                  - ses:SetActiveReceiptRuleSet
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:ListQueueTags
+                  - sqs:ListQueues
+                  - sqs:RemovePermission
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
+                  - sts:GetCallerIdentity
+                Resource: "*"
+              - Sid: BudgetedAndSstRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/sst-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*budgeted*"
+              - Sid: BudgetedAndSstParametersOnly
+                Effect: Allow
+                Action: ["ssm:DeleteParameter", "ssm:GetParameter", "ssm:PutParameter"]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/sst/*"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/budgeted/*"
+              - Sid: OptionalDnsAndCertificate
+                Effect: Allow
+                Action: ["acm:DescribeCertificate", "acm:ListCertificates", "route53:ChangeResourceRecordSets", "route53:GetChange", "route53:GetHostedZone", "route53:ListHostedZonesByName", "route53:ListResourceRecordSets"]
+                Resource: "*"
+              - Sid: PassOnlyBudgetedRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/sst-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*budgeted*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: [lambda.amazonaws.com, cloudformation.amazonaws.com, codebuild.amazonaws.com]
+              - Sid: ExplicitAccountAdministrationDeny
+                Effect: Deny
+                Action:
+                  - account:*
+                  - organizations:*
+                  - aws-portal:*
+                  - billing:*
+                  - iam:CreateAccessKey
+                  - iam:DeleteAccessKey
+                  - iam:UpdateAccessKey
+                  - iam:CreateUser
+                  - iam:DeleteUser
+                  - iam:CreateLoginProfile
+                  - iam:UpdateLoginProfile
+                  - iam:DeleteLoginProfile
+                Resource: "*"
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-runner"
+      ServiceRole: !GetAtt BuildRole.Arn
+      ConcurrentBuildLimit: 1
+      TimeoutInMinutes: 120
+      QueuedTimeoutInMinutes: 30
+      Source:
+        Type: S3
+        Location: !Sub
+          - "${AssetBucket}/runner/${Version}/runner.zip"
+          - Version: !FindInMap [Release, Current, Version]
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 24
+              commands:
+                - corepack enable
+                - corepack prepare pnpm@11.25.0 --activate
+                - pnpm config set store-dir /root/.cache/pnpm/store
+            build:
+              commands:
+                - node runner.cjs
+          cache:
+            paths:
+              - /root/.cache/pnpm/**/*
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Cache:
+        Type: S3
+        Location: !Sub "${AssetBucket}/codebuild-cache"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: TABLE_NAME
+            Type: PLAINTEXT
+            Value: !Ref StateTable
+          - Name: OPERATION_ID
+            Type: PLAINTEXT
+            Value: unset
+          - Name: npm_config_cache
+            Type: PLAINTEXT
+            Value: /root/.cache/pnpm
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref OperationLogGroup
+          StreamName: operation
+
+  ReconcilerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-reconciler"
+      Path: /budgeted-launcher/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Reconciliation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*"
+              - Effect: Allow
+                Action: ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+                Resource: !GetAtt StateTable.Arn
+              - Effect: Allow
+                Action: codebuild:BatchGetBuilds
+                Resource:
+                  - !GetAtt BuildProject.Arn
+                  - !Sub "arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:build/${BuildProject}:*"
+              - Effect: Allow
+                Action: ["ssm:DescribeParameters", "ssm:DeleteParameter", "ssm:DeleteParameters"]
+                Resource: "*"
+
+  ReconcilerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-reconciler"
+      Runtime: nodejs24.x
+      Handler: reconciler.handler
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 60
+      Role: !GetAtt ReconcilerRole.Arn
+      Code:
+        S3Bucket: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+        S3Key: !Sub
+          - "releases/${Version}/lambda/reconciler.zip"
+          - Version: !FindInMap [Release, Current, Version]
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref StateTable
+          OWNER_EMAIL: !Ref OwnerEmail
+          AWS_ACCOUNT_ID: !Ref AWS::AccountId
+          LAUNCHER_VERSION: !FindInMap [Release, Current, Version]
+          BUILD_PROJECT_NAME: !Ref BuildProject
+          OPERATION_PARAMETER_PREFIX: !Sub "/budgeted-launcher/${AWS::StackName}/operations"
+          OPERATION_LOG_GROUP: !Ref OperationLogGroup
+          STACK_NAME: !Ref AWS::StackName
+          SELF_UPDATE_ROLE_ARN: !GetAtt SelfUpdateRole.Arn
+          PUBLISHER_BUCKET: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+          MANIFEST_KEY: stable/manifest.json
+          MANIFEST_PUBLIC_KEY: !FindInMap [Release, Current, ManifestPublicKey]
+
+  BuildTerminalRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source: [aws.codebuild]
+        detail-type: [CodeBuild Build State Change]
+        detail:
+          project-name: [!Ref BuildProject]
+          build-status: [SUCCEEDED, FAILED, FAULT, STOPPED, TIMED_OUT]
+      Targets:
+        - Arn: !GetAtt ReconcilerFunction.Arn
+          Id: reconcile-build
+
+  CleanupRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 hour)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ReconcilerFunction.Arn
+          Id: cleanup-secrets
+
+  ReconcilerBuildPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ReconcilerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BuildTerminalRule.Arn
+
+  ReconcilerCleanupPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ReconcilerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CleanupRule.Arn
+
+  ArtifactRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-artifacts"
+      Path: /budgeted-launcher/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ArtifactCopy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-*"
+              - Effect: Allow
+                Action: ["s3:ListBucket", "s3:ListBucketVersions"]
+                Resource:
+                  - !GetAtt AssetBucket.Arn
+                  - !Sub "arn:${AWS::Partition}:s3:::budgetedhq-budgeted-launcher-${AWS::Region}"
+              - Effect: Allow
+                Action: ["s3:GetObject"]
+                Resource: !Sub
+                  - "arn:${AWS::Partition}:s3:::budgetedhq-budgeted-launcher-${AWS::Region}/releases/${Version}/*"
+                  - Version: !FindInMap [Release, Current, Version]
+              - Effect: Allow
+                Action: ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+                Resource: !Sub "${AssetBucket.Arn}/*"
+
+  ArtifactFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-artifacts"
+      Runtime: nodejs24.x
+      Handler: artifacts.handler
+      Architectures: [arm64]
+      MemorySize: 256
+      Timeout: 300
+      Role: !GetAtt ArtifactRole.Arn
+      Code:
+        S3Bucket: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+        S3Key: !Sub
+          - "releases/${Version}/lambda/artifacts.zip"
+          - Version: !FindInMap [Release, Current, Version]
+
+  InstalledAssets:
+    Type: Custom::BudgetedLauncherAssets
+    DependsOn: AssetBucketPolicy
+    Properties:
+      ServiceToken: !GetAtt ArtifactFunction.Arn
+      SourceBucket: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+      DestinationBucket: !Ref AssetBucket
+      Version: !FindInMap [Release, Current, Version]
+      LauncherUrl: !Sub "https://${Distribution.DomainName}/"
+      AwsRegion: !Ref AWS::Region
+      UserPoolId: !Ref UserPool
+      UserPoolClientId: !Ref UserPoolClient
+      CognitoDomain: !Sub "https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+
+  SelfUpdateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-self-update"
+      Path: /budgeted-launcher/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: UpdateLauncherStackOnly
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["apigateway:*", "cloudfront:*", "codebuild:*", "cognito-idp:*", "dynamodb:*", "events:*", "lambda:*", "logs:*", "s3:*", "ssm:*"]
+                Resource: "*"
+              - Effect: Allow
+                Action: ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole"]
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/budgeted-launcher/${AWS::StackName}-*"
+
+Outputs:
+  LauncherUrl:
+    Description: Open this private URL after the stack finishes creating.
+    Value: !Sub "https://${Distribution.DomainName}/"
+  LauncherVersion:
+    Value: !FindInMap [Release, Current, Version]
+  AwsAccountId:
+    Value: !Ref AWS::AccountId
+  AwsRegion:
+    Value: !Ref AWS::Region

@@ -1,0 +1,10 @@
+node_modules/
+.pnpm-store/
+dist/
+release/
+vendor/node/
+vendor/aws-cli/
+vendor/.aws-*/
+coverage/
+.DS_Store
+*.log

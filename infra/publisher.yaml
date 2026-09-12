@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Maintainer-only regional publisher for Budgeted Launcher immutable releases.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: budgetedhq/budgeted-launcher
+  GitHubOidcProviderArn:
+    Type: String
+    Description: ARN of the account's existing token.actions.githubusercontent.com OIDC provider.
+
+Resources:
+  PublisherBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "budgetedhq-budgeted-launcher-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  PublisherBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PublisherBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReleaseRead
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource:
+              - !Sub "${PublisherBucket.Arn}/stable/*"
+              - !Sub "${PublisherBucket.Arn}/releases/*"
+          - Sid: PublicReleaseList
+            Effect: Allow
+            Principal: "*"
+            Action: s3:ListBucket
+            Resource: !GetAtt PublisherBucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix: ["releases/*"]
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt PublisherBucket.Arn
+              - !Sub "${PublisherBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  GitHubPublisherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "BudgetedLauncherPublisher-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:ref:refs/tags/v*"
+      Policies:
+        - PolicyName: PublishImmutableLauncherArtifacts
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject"]
+                Resource:
+                  - !Sub "${PublisherBucket.Arn}/releases/*"
+                  - !Sub "${PublisherBucket.Arn}/stable/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt PublisherBucket.Arn
+              - Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+
+Outputs:
+  BucketName:
+    Value: !Ref PublisherBucket
+  GitHubPublisherRoleArn:
+    Value: !GetAtt GitHubPublisherRole.Arn
