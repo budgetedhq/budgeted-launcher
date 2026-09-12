@@ -8,3 +8,4 @@ vendor/.aws-*/
 coverage/
 .DS_Store
 *.log
+keys/
