@@ -11,4 +11,8 @@ const missing = requirements.filter((value) => !source.includes(value));
 if (missing.length) throw new Error(`CloudFormation template is missing: ${missing.join(", ")}`);
 const parameters = source.slice(source.indexOf("Parameters:"), source.indexOf("Mappings:"));
 if ((parameters.match(/^ {2}[A-Za-z][A-Za-z0-9]+:/gm) ?? []).join(",") !== "  OwnerEmail:") throw new Error("OwnerEmail must be the template's only parameter.");
+const userPool = source.slice(source.indexOf("  UserPool:\n"), source.indexOf("  OwnerUser:\n"));
+if (!userPool.includes("AllowedFirstAuthFactors: [EMAIL_OTP]")) throw new Error("The owner user pool must allow EMAIL_OTP as its first authentication factor.");
+if (userPool.includes("PASSWORD")) throw new Error("The passwordless owner user pool must not enable PASSWORD authentication.");
+if (userPool.includes("AccountRecoverySetting:")) throw new Error("The passwordless owner user pool must not configure password recovery.");
 process.stdout.write("CloudFormation appliance invariants validated.\n");

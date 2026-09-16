@@ -11,4 +11,13 @@ describe("CloudFormation appliance", () => {
     expect(template).toContain("ConcurrentBuildLimit: 1");
     expect(template).toContain("PointInTimeRecoveryEnabled: true");
   });
+
+  it("keeps the owner user pool passwordless without password recovery", async () => {
+    const template = await readFile(resolve(process.cwd(), "infra/launcher.yaml"), "utf8");
+    const userPool = template.slice(template.indexOf("  UserPool:\n"), template.indexOf("  OwnerUser:\n"));
+
+    expect(userPool).toContain("AllowedFirstAuthFactors: [EMAIL_OTP]");
+    expect(userPool).not.toContain("PASSWORD");
+    expect(userPool).not.toContain("AccountRecoverySetting:");
+  });
 });
