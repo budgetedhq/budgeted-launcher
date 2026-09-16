@@ -18,6 +18,9 @@ describe("CloudFormation appliance", () => {
 
     expect(userPool).toContain("AllowedFirstAuthFactors: [EMAIL_OTP]");
     expect(userPool).not.toContain("PASSWORD");
-    expect(userPool).not.toContain("AccountRecoverySetting:");
+    expect(userPool).toContain("AccountRecoverySetting:");
+    expect(userPool).toContain("- Name: admin_only");
+    expect(userPool).not.toContain("verified_email");
+    expect(userPool).not.toContain("verified_phone_number");
   });
 });

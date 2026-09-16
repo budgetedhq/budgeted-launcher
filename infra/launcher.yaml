@@ -220,6 +220,10 @@ Resources:
       Policies:
         SignInPolicy:
           AllowedFirstAuthFactors: [EMAIL_OTP]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: admin_only
+            Priority: 1
       DeletionProtection: INACTIVE
       UserAttributeUpdateSettings:
         AttributesRequireVerificationBeforeUpdate: [email]

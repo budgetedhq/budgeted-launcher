@@ -14,5 +14,7 @@ if ((parameters.match(/^ {2}[A-Za-z][A-Za-z0-9]+:/gm) ?? []).join(",") !== "  Ow
 const userPool = source.slice(source.indexOf("  UserPool:\n"), source.indexOf("  OwnerUser:\n"));
 if (!userPool.includes("AllowedFirstAuthFactors: [EMAIL_OTP]")) throw new Error("The owner user pool must allow EMAIL_OTP as its first authentication factor.");
 if (userPool.includes("PASSWORD")) throw new Error("The passwordless owner user pool must not enable PASSWORD authentication.");
-if (userPool.includes("AccountRecoverySetting:")) throw new Error("The passwordless owner user pool must not configure password recovery.");
+if (!userPool.includes("AccountRecoverySetting:")) throw new Error("The passwordless owner user pool must explicitly configure account recovery.");
+if (!userPool.includes("- Name: admin_only")) throw new Error("The passwordless owner user pool must disable self-service password recovery with admin_only.");
+if (userPool.includes("verified_email") || userPool.includes("verified_phone_number")) throw new Error("The passwordless owner user pool must not enable email or phone password recovery.");
 process.stdout.write("CloudFormation appliance invariants validated.\n");
