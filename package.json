@@ -1,6 +1,6 @@
 {
   "name": "budgeted-launcher",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Deploy and maintain Budgeted from a private serverless launcher in your AWS account.",
   "repository": {

@@ -92,7 +92,7 @@ function mockRequest(path: string, options: RequestOptions) {
     return operation;
   }
   if (/\/logs(?:\?|$)/.test(path)) return { operationId: path.split("/")[4], lines: ["Development harness: sanitized operation output."], complete: true };
-  if (path === "api/v1/launcher/releases") return { version: "0.2.2", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.2/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
+  if (path === "api/v1/launcher/releases") return { version: "0.2.3", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.3/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
   if (path === "api/v1/launcher/update") { mock.settings.launcherVersion = String((options.body as { version: string }).version); return { accepted: true }; }
   return {};
 }

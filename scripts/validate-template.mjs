@@ -12,9 +12,15 @@ if (missing.length) throw new Error(`CloudFormation template is missing: ${missi
 const parameters = source.slice(source.indexOf("Parameters:"), source.indexOf("Mappings:"));
 if ((parameters.match(/^ {2}[A-Za-z][A-Za-z0-9]+:/gm) ?? []).join(",") !== "  OwnerEmail:") throw new Error("OwnerEmail must be the template's only parameter.");
 const userPool = source.slice(source.indexOf("  UserPool:\n"), source.indexOf("  OwnerUser:\n"));
-if (!userPool.includes("AllowedFirstAuthFactors: [EMAIL_OTP]")) throw new Error("The owner user pool must allow EMAIL_OTP as its first authentication factor.");
-if (userPool.includes("PASSWORD")) throw new Error("The passwordless owner user pool must not enable PASSWORD authentication.");
+if (!userPool.includes("AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]")) throw new Error("The owner user pool must include Cognito's required PASSWORD factor and EMAIL_OTP.");
 if (!userPool.includes("AccountRecoverySetting:")) throw new Error("The passwordless owner user pool must explicitly configure account recovery.");
 if (!userPool.includes("- Name: admin_only")) throw new Error("The passwordless owner user pool must disable self-service password recovery with admin_only.");
 if (userPool.includes("verified_email") || userPool.includes("verified_phone_number")) throw new Error("The passwordless owner user pool must not enable email or phone password recovery.");
+const ownerUser = source.slice(source.indexOf("  OwnerUser:\n"), source.indexOf("  UserPoolDomain:\n"));
+if (ownerUser.includes("TemporaryPassword:")) throw new Error("The owner user must not be assigned a Cognito password.");
+const userPoolClient = source.slice(source.indexOf("  UserPoolClient:\n"), source.indexOf("  ApiAuthorizer:\n"));
+if (!userPoolClient.includes("ALLOW_USER_AUTH")) throw new Error("The browser client must enable choice-based USER_AUTH.");
+for (const flow of ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_ADMIN_USER_PASSWORD_AUTH"]) {
+  if (userPoolClient.includes(flow)) throw new Error(`The browser client must not enable ${flow}.`);
+}
 process.stdout.write("CloudFormation appliance invariants validated.\n");

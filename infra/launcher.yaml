@@ -219,7 +219,9 @@ Resources:
         AllowAdminCreateUserOnly: true
       Policies:
         SignInPolicy:
-          AllowedFirstAuthFactors: [EMAIL_OTP]
+          # Cognito requires PASSWORD during pool creation. The owner receives no
+          # password, self-service recovery is disabled, and the client uses USER_AUTH.
+          AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]
       AccountRecoverySetting:
         RecoveryMechanisms:
           - Name: admin_only
