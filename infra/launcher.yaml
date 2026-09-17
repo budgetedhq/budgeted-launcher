@@ -267,6 +267,14 @@ Resources:
       LogoutURLs:
         - !Sub "https://${Distribution.DomainName}/"
 
+  ManagedLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref UserPoolClient
+      UseCognitoProvidedValues: true
+
   ApiAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
     Properties:

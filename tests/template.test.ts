@@ -16,7 +16,8 @@ describe("CloudFormation appliance", () => {
     const template = await readFile(resolve(process.cwd(), "infra/launcher.yaml"), "utf8");
     const userPool = template.slice(template.indexOf("  UserPool:\n"), template.indexOf("  OwnerUser:\n"));
     const ownerUser = template.slice(template.indexOf("  OwnerUser:\n"), template.indexOf("  UserPoolDomain:\n"));
-    const userPoolClient = template.slice(template.indexOf("  UserPoolClient:\n"), template.indexOf("  ApiAuthorizer:\n"));
+    const userPoolClient = template.slice(template.indexOf("  UserPoolClient:\n"), template.indexOf("  ManagedLoginBranding:\n"));
+    const managedLoginBranding = template.slice(template.indexOf("  ManagedLoginBranding:\n"), template.indexOf("  ApiAuthorizer:\n"));
 
     expect(userPool).toContain("AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP]");
     expect(userPool).toContain("AccountRecoverySetting:");
@@ -28,6 +29,11 @@ describe("CloudFormation appliance", () => {
     expect(userPoolClient).not.toContain("ALLOW_USER_PASSWORD_AUTH");
     expect(userPoolClient).not.toContain("ALLOW_USER_SRP_AUTH");
     expect(userPoolClient).not.toContain("ALLOW_ADMIN_USER_PASSWORD_AUTH");
+    expect(managedLoginBranding).toContain("Type: AWS::Cognito::ManagedLoginBranding");
+    expect(managedLoginBranding).toContain("DependsOn: UserPoolDomain");
+    expect(managedLoginBranding).toContain("UserPoolId: !Ref UserPool");
+    expect(managedLoginBranding).toContain("ClientId: !Ref UserPoolClient");
+    expect(managedLoginBranding).toContain("UseCognitoProvidedValues: true");
   });
 
   it("uses valid CloudFront managed policies for static assets and the uncached API", async () => {

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../infra/launcher.yaml", import.meta.url), "utf8");
 const requirements = [
   "OwnerEmail:", "AWS::CloudFront::OriginAccessControl", "AWS::Cognito::UserPool", "EMAIL_OTP",
+  "AWS::Cognito::ManagedLoginBranding", "UseCognitoProvidedValues: true",
   "AWS::ApiGatewayV2::Authorizer", "nodejs24.x", "BUILD_GENERAL1_MEDIUM", "ConcurrentBuildLimit: 1",
   "TimeoutInMinutes: 120", "PrivilegedMode: false", "PointInTimeRecoveryEnabled: true", "RetentionInDays: 30",
   "LauncherUrl:", "LauncherVersion:", "AwsAccountId:", "AwsRegion:",
@@ -28,4 +29,8 @@ if (!userPoolClient.includes("ALLOW_USER_AUTH")) throw new Error("The browser cl
 for (const flow of ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_ADMIN_USER_PASSWORD_AUTH"]) {
   if (userPoolClient.includes(flow)) throw new Error(`The browser client must not enable ${flow}.`);
 }
+const managedLoginBranding = source.slice(source.indexOf("  ManagedLoginBranding:\n"), source.indexOf("  ApiAuthorizer:\n"));
+if (!managedLoginBranding.includes("DependsOn: UserPoolDomain")) throw new Error("Managed login branding must wait for the version-2 user pool domain.");
+if (!managedLoginBranding.includes("UserPoolId: !Ref UserPool") || !managedLoginBranding.includes("ClientId: !Ref UserPoolClient")) throw new Error("Managed login branding must be assigned to the launcher browser client.");
+if (!managedLoginBranding.includes("UseCognitoProvidedValues: true")) throw new Error("Managed login branding must apply Cognito's default style.");
 process.stdout.write("CloudFormation appliance invariants validated.\n");
