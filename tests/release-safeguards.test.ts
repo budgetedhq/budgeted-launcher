@@ -31,10 +31,21 @@ describe("release safeguards", () => {
     expect(workflow).toContain("IAM_VALIDATED_LAUNCHER_VERSION");
   });
 
-  it("does not expose bucket listing and separates staging from promotion", async () => {
+  it("limits public bucket listing to release renderer assets and separates staging from promotion", async () => {
     const template = await readFile(resolve(process.cwd(), "infra/publisher.yaml"), "utf8");
     const deploymentScript = await readFile(resolve(process.cwd(), "deploy/deploy-stacks.sh"), "utf8");
-    expect(template).not.toContain("PublicReleaseList");
+    const bucketPolicy = template.slice(template.indexOf("  PublisherBucketPolicy:\n"), template.indexOf("  GitHubStagingRole:\n"));
+    const rendererListStatement = bucketPolicy.slice(
+      bucketPolicy.indexOf("          - Sid: PublicReleaseRendererList\n"),
+      bucketPolicy.indexOf("          - Sid: PublicReleaseRead\n"),
+    );
+    expect(bucketPolicy.match(/Action: s3:ListBucket/g)).toHaveLength(1);
+    expect(rendererListStatement).toContain('Principal: "*"');
+    expect(rendererListStatement).toContain("Action: s3:ListBucket");
+    expect(rendererListStatement).toContain("Condition:");
+    expect(rendererListStatement).toContain('s3:prefix:');
+    expect(rendererListStatement).toContain('- "releases/*/renderer/"');
+    expect(rendererListStatement).toContain('- "releases/*/renderer/*"');
     expect(template).toContain("BudgetedLauncherStager-${AWS::Region}");
     expect(template).toContain("BudgetedLauncherPromoter-${AWS::Region}");
     expect(template).toContain("promotion-backups/");

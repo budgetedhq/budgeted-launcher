@@ -53,6 +53,16 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          - Sid: PublicReleaseRendererList
+            Effect: Allow
+            Principal: "*"
+            Action: s3:ListBucket
+            Resource: !GetAtt PublisherBucket.Arn
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - "releases/*/renderer/"
+                  - "releases/*/renderer/*"
           - Sid: PublicReleaseRead
             Effect: Allow
             Principal: "*"
