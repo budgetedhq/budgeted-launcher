@@ -47,4 +47,15 @@ describe("CloudFormation appliance", () => {
     ]);
     expect(distribution).toContain("OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac");
   });
+
+  it("allows SST to configure notifications only on SST and Budgeted buckets", async () => {
+    const template = await readFile(resolve(process.cwd(), "infra/launcher.yaml"), "utf8");
+    const buildRole = template.slice(template.indexOf("  BuildRole:\n"), template.indexOf("  BuildProject:\n"));
+    const notifications = buildRole.slice(buildRole.indexOf("- Sid: BudgetedAndSstBucketNotifications"), buildRole.indexOf("- Sid: OptionalDnsAndCertificate"));
+
+    expect(notifications).toContain("Action: s3:PutBucketNotification");
+    expect(notifications).toContain('!Sub "arn:${AWS::Partition}:s3:::sst-*"');
+    expect(notifications).toContain('!Sub "arn:${AWS::Partition}:s3:::budgeted*"');
+    expect(notifications).not.toContain('Resource: "*"');
+  });
 });

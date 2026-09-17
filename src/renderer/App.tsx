@@ -20,6 +20,7 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
   const [consoleOutput, setConsoleOutput] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState<DisplayError>();
+  const [dismissedOperationId, setDismissedOperationId] = useState<string>();
   const [deploymentAcknowledged, setDeploymentAcknowledged] = useState(false);
   const [removalAcknowledged, setRemovalAcknowledged] = useState(false);
   const [launcherRelease, setLauncherRelease] = useState<LauncherRelease>();
@@ -35,10 +36,12 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
     return next;
   }, []);
 
-  const activeId = snapshot?.activeOperation?.id;
-  const activeStatus = snapshot?.activeOperation?.status;
-  const observedId = activeId ?? snapshot?.latestOperations[0]?.id;
-  const observedStatus = activeStatus ?? snapshot?.latestOperations[0]?.status;
+  const active = snapshot?.activeOperation;
+  const observedOperation = active ?? snapshot?.latestOperations[0];
+  const activeId = active?.id;
+  const activeStatus = active?.status;
+  const observedId = observedOperation?.id;
+  const observedStatus = observedOperation?.status;
 
   useEffect(() => { if (authenticated) void refresh().catch(showError); }, [authenticated, refresh]);
   useEffect(() => {
@@ -67,7 +70,6 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
   const revision = snapshot?.settings.configuration.revision ?? 0;
   const release = snapshot?.settings.selectedRelease;
   const installed = snapshot?.settings.installation;
-  const active = snapshot?.activeOperation;
   const pending = snapshot?.settings.pendingDeployment;
   const adminPassword = secrets.adminPassword ?? "";
   const adminPasswordError = adminPassword.length > 0 && adminPassword.length < MIN_ADMIN_PASSWORD_LENGTH
@@ -116,6 +118,7 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
 
   async function start(action: "prepare" | "diff" | "deploy" | "redeploy" | "rollback" | "unlock" | "seed" | "remove" | "verify", options: { acknowledged?: boolean; withSecrets?: boolean } = {}) {
     setConsoleOutput("");
+    setDismissedOperationId(undefined);
     await run(`Starting ${action}`, () => api.startOperation(action, revision, { release, acknowledged: options.acknowledged, secrets: options.withSecrets ? secrets : undefined }));
   }
 
@@ -129,6 +132,7 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
     </header>
     {busy && <div className="banner progress"><span className="spinner" />{busy}</div>}
     {error && <div className="banner error" role="alert"><div className="error-content"><strong>{error.summary}</strong>{error.details && <ul>{error.details.map(({ field, message }, index) => <li key={`${field}-${index}`}><span>{field}:</span> {message}</li>)}</ul>}{error.requestId && <span className="error-reference">Reference: {error.requestId}</span>}</div><button onClick={() => setError(undefined)}>Dismiss</button></div>}
+    {observedOperation && observedOperation.id !== dismissedOperationId && <OperationBanner operation={observedOperation} onDismiss={() => setDismissedOperationId(observedOperation.id)} />}
     <main>
       <section>
         <div className="section-title"><h2>Installation</h2><p>The launcher and Budgeted stay in this AWS account and immutable region.</p></div>
@@ -148,8 +152,15 @@ export function App({ authenticated = true }: { authenticated?: boolean }) {
         {step === 5 && <Panel title="Deploy" description="Review the console output, then explicitly acknowledge creation of Budgeted resources."><label className="check"><input type="checkbox" checked={deploymentAcknowledged} onChange={(event) => setDeploymentAcknowledged(event.target.checked)} />I reviewed the diff and authorize Budgeted resources to be created or updated.</label><div className="actions"><button className="primary" disabled={!deploymentAcknowledged || Boolean(active)} onClick={() => void start("deploy", { acknowledged: true, withSecrets: true })}>Deploy Budgeted</button><button onClick={() => setStep(4)}>Return to check</button></div></Panel>}
       </> : <Installed snapshot={snapshot} configuration={configuration} setConfiguration={setConfiguration} secrets={secrets} setSecrets={setSecrets} saveStructured={saveStructured} toml={toml} setToml={setToml} saveToml={saveToml} start={start} active={active} removalAcknowledged={removalAcknowledged} setRemovalAcknowledged={setRemovalAcknowledged} launcherRelease={launcherRelease} checkBudgeted={() => void run("Checking Budgeted releases", () => api.checkBudgetedRelease(revision))} checkLauncher={() => void run("Checking Launcher updates", async () => setLauncherRelease(await api.launcherRelease()))} updateLauncher={() => launcherRelease && window.confirm(`Update Launcher to ${launcherRelease.version}?`) && void run("CloudFormation is updating Launcher", async () => { await updateLauncherAndWait(revision, launcherRelease.version); window.location.reload(); })} />}
     </main>
-    {(consoleOutput || active) && <section className="console"><details open={Boolean(active)}><summary>Console Output</summary><pre>{consoleOutput || "Waiting for sanitized CodeBuild output…"}</pre>{active && !terminal(active) && <button onClick={() => void api.cancel(active.id, revision)}>Cancel operation</button>}</details></section>}
+    {observedOperation && <section className="console"><details open={!terminal(observedOperation) || operationFailed(observedOperation)}><summary>Console Output</summary><pre>{consoleOutput || (terminal(observedOperation) ? "No console output is available." : "Waiting for sanitized CodeBuild output…")}</pre>{active && !terminal(active) && <button onClick={() => void api.cancel(active.id, revision)}>Cancel operation</button>}</details></section>}
   </div>;
+}
+
+export function OperationBanner({ operation, onDismiss }: { operation: CloudOperation; onDismiss: () => void }) {
+  const label = operationLabel(operation.action);
+  if (!terminal(operation)) return <div className="banner progress" role="status"><span className="spinner" aria-hidden="true" /><div className="operation-message"><strong>{label.progress}…</strong><span>The command is running and may take a few minutes to complete.</span></div></div>;
+  if (!operationFailed(operation)) return null;
+  return <div className="banner error" role="alert"><div className="error-content"><strong>{label.command} failed.</strong><span>{operation.error || "The command did not complete."}</span><span>Review Console Output for details.</span></div><button onClick={onDismiss}>Dismiss</button></div>;
 }
 
 function Panel({ title, description, children }: { title: string; description: string; children: ReactNode }) { return <section className="panel"><div className="section-title"><h2>{title}</h2><p>{description}</p></div><div className="section-body">{children}</div></section>; }
@@ -213,3 +224,17 @@ function Installed(props: InstalledProps) {
 }
 function terminal(operation: CloudOperation) { return ["succeeded", "failed", "cancelled", "interrupted"].includes(operation.status); }
 function terminalStatus(status: CloudOperation["status"] | undefined) { return Boolean(status && ["succeeded", "failed", "cancelled", "interrupted"].includes(status)); }
+function operationFailed(operation: CloudOperation) { return ["failed", "interrupted"].includes(operation.status); }
+function operationLabel(action: CloudOperation["action"]) {
+  return {
+    prepare: { command: "Prepare release", progress: "Preparing release" },
+    diff: { command: "Check deployment", progress: "Checking deployment" },
+    deploy: { command: "Deploy Budgeted", progress: "Deploying Budgeted" },
+    redeploy: { command: "Redeploy Budgeted", progress: "Redeploying Budgeted" },
+    rollback: { command: "Rollback", progress: "Rolling back" },
+    unlock: { command: "Unlock SST", progress: "Unlocking SST" },
+    seed: { command: "Create administrator", progress: "Creating administrator" },
+    remove: { command: "Remove Budgeted", progress: "Removing Budgeted" },
+    verify: { command: "Verify deployment state", progress: "Verifying deployment state" },
+  }[action];
+}

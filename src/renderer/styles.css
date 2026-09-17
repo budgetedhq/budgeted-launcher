@@ -49,6 +49,8 @@ summary { color: #c5cfda; cursor: pointer; font-size: 13px; font-weight: 650; }
 .release p { margin-bottom: 0; }
 .banner { display: flex; align-items: center; gap: 10px; margin-top: 14px; border: 1px solid; padding: 11px 14px; font-size: 13px; }
 .banner.error { align-items: flex-start; justify-content: space-between; border-color: #77363c; background: #261519; color: #ffb0b0; }
+.operation-message { display: grid; gap: 3px; }
+.operation-message span { color: #c8def2; font-size: 12px; }
 .error-content { display: grid; gap: 6px; }
 .error-content ul { margin: 0; padding-left: 18px; }
 .error-content li span { font-weight: 700; }

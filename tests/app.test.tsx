@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { App } from "../src/renderer/App";
+import { App, OperationBanner } from "../src/renderer/App";
+import type { CloudOperation } from "../src/shared/contracts";
 
 describe("browser launcher", () => {
   it("shows the five-step serverless setup and immutable AWS properties", async () => {
@@ -32,5 +33,33 @@ describe("browser launcher", () => {
     await user.type(screen.getByLabelText(/Confirm password/), "123");
     expect(screen.queryByText("Use at least 8 characters.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled();
+  });
+
+  it("shows persistent running and failed operation feedback", async () => {
+    const user = userEvent.setup();
+    const operation: CloudOperation = {
+      id: "977b1b90-cf3a-4a05-8979-c65b085b210e",
+      action: "prepare",
+      inputRevision: 1,
+      fingerprint: "a".repeat(64),
+      phase: "setting-secrets",
+      status: "running",
+      createdAt: new Date().toISOString(),
+      expiresAt: Math.floor(Date.now() / 1_000) + 60,
+      remoteStateUncertain: false,
+    };
+    const onDismiss = vi.fn();
+    const view = render(<OperationBanner operation={operation} onDismiss={onDismiss} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing release…");
+    expect(screen.getByRole("status")).toHaveTextContent("The command is running and may take a few minutes to complete.");
+    expect(view.container.querySelector(".spinner")).toBeInTheDocument();
+
+    view.rerender(<OperationBanner operation={{ ...operation, status: "failed", phase: "failed", error: "SST could not configure the asset bucket." }} onDismiss={onDismiss} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Prepare release failed.");
+    expect(screen.getByRole("alert")).toHaveTextContent("SST could not configure the asset bucket.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Review Console Output for details.");
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

@@ -6,7 +6,7 @@ const requirements = [
   "AWS::Cognito::ManagedLoginBranding", "UseCognitoProvidedValues: true",
   "AWS::ApiGatewayV2::Authorizer", "nodejs24.x", "BUILD_GENERAL1_MEDIUM", "ConcurrentBuildLimit: 1",
   "TimeoutInMinutes: 120", "PrivilegedMode: false", "PointInTimeRecoveryEnabled: true", "RetentionInDays: 30",
-  "LauncherUrl:", "LauncherVersion:", "AwsAccountId:", "AwsRegion:",
+  "s3:PutBucketNotification", "LauncherUrl:", "LauncherVersion:", "AwsAccountId:", "AwsRegion:",
 ];
 const missing = requirements.filter((value) => !source.includes(value));
 if (missing.length) throw new Error(`CloudFormation template is missing: ${missing.join(", ")}`);
