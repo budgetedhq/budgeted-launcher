@@ -57,7 +57,8 @@ export const MIN_ADMIN_PASSWORD_LENGTH = 8;
 export const liveSecretsSchema = z.object({
   amazonOrderScraperApiToken: z.string().min(1).optional(), plaidClientId: z.string().min(1).optional(),
   plaidSecret: z.string().min(1).optional(), openAiApiKey: z.string().min(1).optional(),
-  googleGenerativeAiApiKey: z.string().min(1).optional(), adminPassword: z.string().min(MIN_ADMIN_PASSWORD_LENGTH).optional(),
+  googleGenerativeAiApiKey: z.string().min(1).optional(),
+  adminPassword: z.string().min(MIN_ADMIN_PASSWORD_LENGTH, `Must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters.`).optional(),
 });
 export type LiveSecrets = z.infer<typeof liveSecretsSchema>;
 

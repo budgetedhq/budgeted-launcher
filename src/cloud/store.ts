@@ -114,10 +114,15 @@ export class StateStore {
     const recentIds = [input.operation.id, ...(await this.getState()).latestOperationIds].slice(0, 20);
     try {
       await client.send(new TransactWriteCommand({ TransactItems: [
-        { ConditionCheck: { TableName: this.tableName, Key: { pk: STATE_KEY }, ConditionExpression: "configuration.revision = :revision AND attribute_not_exists(activeOperationId)", ExpressionAttributeValues: { ":revision": input.expectedRevision } } },
         { Put: { TableName: this.tableName, Item: { pk: operationKey(input.operation.id), ...input.operation, initialAdmin: input.initialAdmin, secretParameterNames: input.secretParameterNames }, ConditionExpression: "attribute_not_exists(pk)" } },
         { Put: { TableName: this.tableName, Item: { pk: idempotencyKey(input.idempotencyKey), operationId: input.operation.id, action: input.operation.action, expiresAt: input.operation.expiresAt }, ConditionExpression: "attribute_not_exists(pk)" } },
-        { Update: { TableName: this.tableName, Key: { pk: STATE_KEY }, UpdateExpression: "SET activeOperationId = :id, latestOperationIds = :ids, updatedAt = :now", ExpressionAttributeValues: { ":id": input.operation.id, ":ids": recentIds, ":now": new Date().toISOString() } } },
+        { Update: {
+          TableName: this.tableName,
+          Key: { pk: STATE_KEY },
+          UpdateExpression: "SET activeOperationId = :id, latestOperationIds = :ids, updatedAt = :now",
+          ConditionExpression: "configuration.revision = :revision AND attribute_not_exists(activeOperationId)",
+          ExpressionAttributeValues: { ":id": input.operation.id, ":ids": recentIds, ":now": new Date().toISOString(), ":revision": input.expectedRevision },
+        } },
       ] }));
       return input.operation;
     } catch (error) {

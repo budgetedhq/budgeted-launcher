@@ -18,5 +18,19 @@ describe("browser launcher", () => {
     expect(screen.getByRole("option", { name: "Custom Domain Hosted by AWS" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Custom Domain Hosted Elsewhere" })).toBeInTheDocument();
     expect(screen.getByText("Advanced settings")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save and continue" }));
+    expect(await screen.findByRole("heading", { name: "Integrations and administrator" })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Administrator email"), "owner@example.com");
+    await user.type(screen.getByLabelText(/Administrator password/), "short");
+    await user.type(screen.getByLabelText("Confirm password"), "short");
+    expect(screen.getByText("Use at least 8 characters.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save and continue" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/Administrator password/), "123");
+    await user.type(screen.getByLabelText(/Confirm password/), "123");
+    expect(screen.queryByText("Use at least 8 characters.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled();
   });
 });

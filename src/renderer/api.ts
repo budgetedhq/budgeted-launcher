@@ -1,4 +1,4 @@
-import { apiErrorSchema, DEFAULT_CONFIGURATION, type BudgetedConfiguration, type CloudOperation, type InitialAdmin, type LauncherRelease, type LauncherSnapshot, type LiveSecrets, type LogPage, type OperationAction, type ReleaseMetadata } from "../shared/contracts";
+import { apiErrorSchema, DEFAULT_CONFIGURATION, type ApiError, type BudgetedConfiguration, type CloudOperation, type InitialAdmin, type LauncherRelease, type LauncherSnapshot, type LiveSecrets, type LogPage, type OperationAction, type ReleaseMetadata } from "../shared/contracts";
 import { getIdToken, getRuntimeConfig } from "./auth";
 
 type RequestOptions = { method?: "GET" | "POST" | "PUT"; body?: unknown; idempotent?: boolean };
@@ -18,16 +18,51 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const value: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) throw new Error(formatApiError(value));
+  if (!response.ok) {
+    const parsed = apiErrorSchema.safeParse(value);
+    if (parsed.success) throw new ApiRequestError(parsed.data);
+    throw new Error("Launcher request failed.");
+  }
   return value as T;
+}
+
+export type ApiFieldIssue = { field: string; message: string };
+
+const FIELD_LABELS: Record<string, string> = {
+  "configuration.appName": "Application name",
+  "configuration.productionStage": "Production stage",
+  "configuration.domain.name": "Domain name",
+  "configuration.domain.certificateArn": "ACM certificate ARN",
+  "initialAdmin.email": "Administrator email",
+  "secrets.adminPassword": "Administrator password",
+};
+
+export class ApiRequestError extends Error {
+  constructor(readonly response: ApiError) {
+    super(formatApiError(response));
+    this.name = "ApiRequestError";
+  }
+}
+
+export function apiFieldIssues(value: ApiError): ApiFieldIssue[] {
+  return Object.entries(value.fieldErrors ?? {}).flatMap(([path, messages]) => messages.map((message) => ({
+    field: FIELD_LABELS[path] ?? humanizeFieldPath(path),
+    message,
+  })));
 }
 
 export function formatApiError(value: unknown) {
   const parsed = apiErrorSchema.safeParse(value);
   if (!parsed.success) return "Launcher request failed.";
-  const details = [...new Set(Object.values(parsed.data.fieldErrors ?? {}).flat())];
-  const message = details.length ? details.join(" ") : parsed.data.message;
+  const details = apiFieldIssues(parsed.data).map(({ field, message }) => `${field}: ${message}`);
+  const message = details.length ? [...new Set(details)].join(" ") : parsed.data.message;
   return `${message} (${parsed.data.requestId})`;
+}
+
+function humanizeFieldPath(path: string) {
+  const field = path.split(".").at(-1) ?? path;
+  const words = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 export const api = {
@@ -100,7 +135,7 @@ function mockRequest(path: string, options: RequestOptions) {
     return operation;
   }
   if (/\/logs(?:\?|$)/.test(path)) return { operationId: path.split("/")[4], lines: ["Development harness: sanitized operation output."], complete: true };
-  if (path === "api/v1/launcher/releases") return { version: "0.2.7", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.7/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
+  if (path === "api/v1/launcher/releases") return { version: "0.2.8", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.8/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
   if (path === "api/v1/launcher/update") { mock.settings.launcherVersion = String((options.body as { version: string }).version); return { accepted: true }; }
   return {};
 }

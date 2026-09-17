@@ -1,4 +1,4 @@
-import { cloudOperationSchema, operationRequestSchema, saveConfigurationRequestSchema } from "../src/shared/contracts";
+import { cloudOperationSchema, liveSecretsSchema, operationRequestSchema, saveConfigurationRequestSchema } from "../src/shared/contracts";
 
 describe("browser API contracts", () => {
   it("requires the current configuration revision on mutations", () => {
@@ -20,5 +20,11 @@ describe("browser API contracts", () => {
       secretParameterNames: { plaidSecret: "/hidden" },
     });
     expect(operation).not.toHaveProperty("secretParameterNames");
+  });
+
+  it("returns a user-friendly administrator password validation message", () => {
+    const result = liveSecretsSchema.safeParse({ adminPassword: "short" });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues[0]?.message).toBe("Must be at least 8 characters.");
   });
 });

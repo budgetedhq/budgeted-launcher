@@ -34,6 +34,7 @@ section { border: 1px solid #252e38; background: #10151b; }
 .grid { display: grid; gap: 12px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .field { display: grid; gap: 6px; color: #9ca8b6; font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
+.field-error { color: #ff9b9b; font-weight: 500; letter-spacing: 0; text-transform: none; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .top-gap { margin-top: 16px; }
 .divider { margin: 20px 0; border-top: 1px solid #27303b; }
@@ -47,7 +48,11 @@ summary { color: #c5cfda; cursor: pointer; font-size: 13px; font-weight: 650; }
 .release { margin-top: 16px; border-left: 3px solid #3a74b5; background: #0c1117; padding: 14px; color: #b6c0cc; font-size: 13px; }
 .release p { margin-bottom: 0; }
 .banner { display: flex; align-items: center; gap: 10px; margin-top: 14px; border: 1px solid; padding: 11px 14px; font-size: 13px; }
-.banner.error { justify-content: space-between; border-color: #77363c; background: #261519; color: #ffb0b0; }
+.banner.error { align-items: flex-start; justify-content: space-between; border-color: #77363c; background: #261519; color: #ffb0b0; }
+.error-content { display: grid; gap: 6px; }
+.error-content ul { margin: 0; padding-left: 18px; }
+.error-content li span { font-weight: 700; }
+.error-reference { color: #d78f95; font-size: 11px; }
 .banner.progress { border-color: #164a7a; background: #082a4a; color: #f2f8ff; }
 .spinner { width: 14px; height: 14px; border: 2px solid #7eb7e8; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
