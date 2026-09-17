@@ -9,10 +9,21 @@ const s3 = new S3Client({});
 const cloudFormation = new CloudFormationClient({});
 
 export class LauncherReleaseService {
-  constructor(private readonly options: { bucket: string; manifestKey: string; publicKey: string; stackName: string; region: string; roleArn: string }) {}
+  constructor(
+    private readonly options: { bucket: string; manifestKey: string; installedManifestKey: string; publicKey: string; stackName: string; region: string; roleArn: string },
+    private readonly clients: { s3: S3Client; cloudFormation: CloudFormationClient } = { s3, cloudFormation },
+  ) {}
 
   async current(): Promise<LauncherRelease> {
-    const result = await s3.send(new GetObjectCommand({ Bucket: this.options.bucket, Key: this.options.manifestKey }));
+    return this.readManifest(this.options.manifestKey);
+  }
+
+  async installed(): Promise<LauncherRelease> {
+    return this.readManifest(this.options.installedManifestKey);
+  }
+
+  private async readManifest(key: string): Promise<LauncherRelease> {
+    const result = await this.clients.s3.send(new GetObjectCommand({ Bucket: this.options.bucket, Key: key }));
     if (!result.Body) throw new Error("The launcher release manifest is empty.");
     const release = launcherReleaseSchema.parse(JSON.parse(await result.Body.transformToString()));
     this.verify(release);
@@ -24,7 +35,7 @@ export class LauncherReleaseService {
     if (release.version !== version) throw new Error("The selected launcher release is no longer current.");
     this.assertTemplateUrl(release.templateUrl, version);
     await this.verifyArtifacts(release);
-    await cloudFormation.send(new UpdateStackCommand({
+    await this.clients.cloudFormation.send(new UpdateStackCommand({
       StackName: this.options.stackName,
       TemplateURL: release.templateUrl,
       Capabilities: ["CAPABILITY_NAMED_IAM"],
@@ -45,7 +56,7 @@ export class LauncherReleaseService {
       "renderer.zip": release.rendererSha256,
     };
     for (const [suffix, digest] of Object.entries(expected)) {
-      const object = await s3.send(new GetObjectCommand({ Bucket: this.options.bucket, Key: `releases/${release.version}/${suffix}` }));
+      const object = await this.clients.s3.send(new GetObjectCommand({ Bucket: this.options.bucket, Key: `releases/${release.version}/${suffix}` }));
       if (!object.Body) throw new Error(`Launcher artifact ${suffix} is missing.`);
       const actual = createHash("sha256").update(await object.Body.transformToByteArray()).digest("hex");
       if (actual !== digest) throw new Error(`Launcher artifact ${suffix} failed checksum verification.`);

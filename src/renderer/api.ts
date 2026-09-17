@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIGURATION, type BudgetedConfiguration, type CloudOperation, type InitialAdmin, type LauncherRelease, type LauncherSnapshot, type LiveSecrets, type LogPage, type OperationAction, type ReleaseMetadata } from "../shared/contracts";
+import { apiErrorSchema, DEFAULT_CONFIGURATION, type BudgetedConfiguration, type CloudOperation, type InitialAdmin, type LauncherRelease, type LauncherSnapshot, type LiveSecrets, type LogPage, type OperationAction, type ReleaseMetadata } from "../shared/contracts";
 import { getIdToken, getRuntimeConfig } from "./auth";
 
 type RequestOptions = { method?: "GET" | "POST" | "PUT"; body?: unknown; idempotent?: boolean };
@@ -17,9 +17,17 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
-  const value = await response.json() as { message?: string; requestId?: string };
-  if (!response.ok) throw new Error(`${value.message ?? "Launcher request failed."}${value.requestId ? ` (${value.requestId})` : ""}`);
+  const value: unknown = await response.json().catch(() => undefined);
+  if (!response.ok) throw new Error(formatApiError(value));
   return value as T;
+}
+
+export function formatApiError(value: unknown) {
+  const parsed = apiErrorSchema.safeParse(value);
+  if (!parsed.success) return "Launcher request failed.";
+  const details = [...new Set(Object.values(parsed.data.fieldErrors ?? {}).flat())];
+  const message = details.length ? details.join(" ") : parsed.data.message;
+  return `${message} (${parsed.data.requestId})`;
 }
 
 export const api = {
@@ -92,7 +100,7 @@ function mockRequest(path: string, options: RequestOptions) {
     return operation;
   }
   if (/\/logs(?:\?|$)/.test(path)) return { operationId: path.split("/")[4], lines: ["Development harness: sanitized operation output."], complete: true };
-  if (path === "api/v1/launcher/releases") return { version: "0.2.6", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.6/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
+  if (path === "api/v1/launcher/releases") return { version: "0.2.7", notes: "No update in the development harness.", publishedAt: new Date().toISOString(), supportedBudgetedRange: ">=0.1.0 <1.0.0", templateUrl: "https://example.com/releases/0.2.7/template.yaml", templateSha256: "a".repeat(64), apiSha256: "a".repeat(64), reconcilerSha256: "a".repeat(64), artifactsSha256: "a".repeat(64), runnerSha256: "a".repeat(64), rendererSha256: "a".repeat(64), signature: "development" };
   if (path === "api/v1/launcher/update") { mock.settings.launcherVersion = String((options.body as { version: string }).version); return { accepted: true }; }
   return {};
 }

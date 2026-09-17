@@ -18,7 +18,7 @@ const env = getEnvironment();
 const store = new StateStore(env.tableName);
 const operations = new OperationService(store, { projectName: env.buildProjectName, parameterPrefix: env.operationParameterPrefix, logGroupName: env.operationLogGroup });
 const launcherReleases = new LauncherReleaseService({
-  bucket: env.publisherBucket, manifestKey: env.manifestKey, publicKey: env.manifestPublicKey,
+  bucket: env.publisherBucket, manifestKey: env.manifestKey, installedManifestKey: env.installedManifestKey, publicKey: env.manifestPublicKey,
   stackName: env.stackName, region: env.awsRegion, roleArn: env.selfUpdateRoleArn,
 });
 const logs = new CloudWatchLogsClient({});
@@ -54,7 +54,7 @@ export async function handler(event: ApiEvent): Promise<APIGatewayProxyResultV2>
       const body = releaseCheckRequestSchema.parse(readBody(event));
       assertRevision(await store.getState(), body.configurationRevision);
       const state = await store.getState();
-      const launcherRelease = await launcherReleases.current();
+      const launcherRelease = await launcherReleases.installed();
       const release = await checkBudgetedRelease(launcherRelease.supportedBudgetedRange);
       const releaseChanged = state.selectedRelease?.commitSha !== release.commitSha;
       await store.mutateState(`SET selectedRelease = :release, lastReleaseCheckAt = :now, updatedAt = :now${releaseChanged ? " REMOVE pendingDeployment" : ""}`, { ":release": release, ":now": new Date().toISOString() });
